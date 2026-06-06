@@ -1,0 +1,26 @@
+# Local credentials and per-account configuration
+nextcentury_credentials.conf
+*.local
+.env
+.env.*
+
+# Runtime state, tokens, and fetched private data
+*_state.json
+work/
+
+# Generated billing outputs
+spu_bill_split_*.csv
+sheet_upload_*.csv
+
+# Manual per-cycle private adjustments
+hoa_adjustments.json
+
+# Python cache/test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Editor/OS noise
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,6 @@
+{
+  "_comment": "Copy to hoa_adjustments.json for local use. Values are manual per-unit HOA line items added on top of the SPU split. Lines starting with _ are ignored.",
+  "Landscape": {"UNIT_1": 0.00, "UNIT_2": 0.00, "UNIT_3": 0.00},
+  "Extra garbage": {"UNIT_1": 0.00, "UNIT_2": 0.00, "UNIT_3": 0.00},
+  "Admin fee": {"UNIT_1": 0.00, "UNIT_2": 0.00, "UNIT_3": 0.00}
+}
