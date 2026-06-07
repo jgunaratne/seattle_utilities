@@ -16,15 +16,28 @@ by git. Start from `config/nextcentury_credentials.conf.example`.
 
 | File | Purpose |
 |---|---|
+| `run_cycle.sh` | One-command orchestrator: login, derive the billing window, pull readings, write the split CSV, and push to the sheet if configured. |
 | `meter_pipeline.py` | Fetches NextCentury readings and checkpoints to `meter_state.json`. |
-| `seattle_bill.py` | Logs into Seattle MyUtilities over HTTP, fetches the bill, and writes the split CSV. |
+| `seattle_bill.py` | Logs into Seattle MyUtilities over HTTP, fetches the bill, writes the split CSV to `output/`, and (via `sheet`) pushes to a Google Sheet. |
 | `config/nextcentury_credentials.conf.example` | Public-safe template for local credentials and account IDs. |
 | `config/hoa_adjustments.json.example` | Public-safe template for local per-cycle manual adjustments. |
 | `AGENT_RUNBOOK.md` | Repeatable operating procedure for each billing cycle. |
 
-Ignored local files include the real `config/` secrets (credentials and the Google
-service-account key), state files, generated CSVs under `output/`, and per-cycle HOA
-adjustments. Only the `config/*.example` templates are tracked.
+Generated split CSVs are written to `output/` (created on demand). Ignored local files
+include the real `config/` secrets (credentials and the Google service-account key JSON),
+state files, the `output/` CSVs, per-cycle HOA adjustments, and the `.venv/`. Only the
+`config/*.example` templates are tracked.
+
+## Dependencies
+
+`requests` is required for everything. The Google Sheet push additionally needs `gspread`
+and `google-auth`. The recommended setup is a virtualenv at `.venv/` (auto-detected by
+`run_cycle.sh`):
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install requests gspread google-auth
+```
 
 ## Local Config
 
@@ -48,11 +61,16 @@ SEATTLE_UTIL_PASSWORD="replace-me"
 SPU_ACCOUNT_NUMBER="replace-me"
 ```
 
-Optional key:
+Optional keys (Google Sheet push, used by `seattle_bill.py sheet`):
 
 ```bash
 GOOGLE_SHEET_ID="replace-me"
+GOOGLE_SA_KEYFILE="google_service_account.json"
 ```
+
+`GOOGLE_SA_KEYFILE` is the path to a Google service-account JSON key; a bare filename is
+resolved relative to `config/` (or use an absolute path). See "Google Sheet Push" below for
+the one-time setup.
 
 ## Runtime State
 
@@ -60,8 +78,21 @@ GOOGLE_SHEET_ID="replace-me"
 `seattle_state.json`, including a short-lived bearer token. These files are private runtime
 state and are ignored by git.
 
-The `work/` directory is reserved for scratch traces, fetched HTML, cookie jars, and other
-debug artifacts. It is ignored by git.
+## Google Sheet Push
+
+`seattle_bill.py sheet` (and `run_cycle.sh`, when configured) writes the split into a tab of
+a Google Sheet named by the bill date. It authenticates with a service account, so the
+one-time setup is:
+
+1. Create a service account in Google Cloud and download its JSON key into `config/`.
+2. Point `GOOGLE_SA_KEYFILE` at that file and set `GOOGLE_SHEET_ID` (the long id in the
+   sheet URL: `.../spreadsheets/d/<THIS>/edit`).
+3. Enable the **Google Sheets API** for the key's Cloud project.
+4. Share the sheet with the service account's email
+   (`…@….iam.gserviceaccount.com`) as an **Editor** — it needs write access.
+
+A plain API key cannot write to a private sheet; writes require an authenticated identity,
+which is why this pipeline uses a service-account key rather than `GOOGLE_CLOUD_API_KEY`.
 
 ## API Notes
 
