@@ -37,7 +37,7 @@ import urllib.request
 import urllib.error
 
 BASE = "https://api.nextcenturymeters.com"
-CONF = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nextcentury_credentials.conf")
+CONF = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "nextcentury_credentials.conf")
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "meter_state.json")
 def _read_conf():
     """Parse the KEY="value" lines from the conf file. Tolerates a missing file
@@ -148,9 +148,9 @@ def reading_on(daily_reads, target):
 # ----------------------------------------------------------------------------- commands
 def cmd_readings(args):
     if not PROPERTY_ID:
-        raise SystemExit("missing NC_PROPERTY_ID in nextcentury_credentials.conf")
+        raise SystemExit("missing NC_PROPERTY_ID in config/nextcentury_credentials.conf")
     if not UNIT_NAMES:
-        raise SystemExit("missing NC_UNIT_NAMES in nextcentury_credentials.conf")
+        raise SystemExit("missing NC_UNIT_NAMES in config/nextcentury_credentials.conf")
 
     start = dt.date.fromisoformat(args.start)
     end = dt.date.fromisoformat(args.end)

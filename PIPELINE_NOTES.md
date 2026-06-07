@@ -9,8 +9,8 @@ This directory contains a small billing pipeline:
 5. Optionally add manual HOA line items from a local adjustment file.
 6. Write CSV output for review or sheet import.
 
-All account-specific values live in `nextcentury_credentials.conf`, which is ignored by
-git. Start from `nextcentury_credentials.conf.example`.
+All account-specific values live in `config/nextcentury_credentials.conf`, which is ignored
+by git. Start from `config/nextcentury_credentials.conf.example`.
 
 ## Files
 
@@ -18,20 +18,21 @@ git. Start from `nextcentury_credentials.conf.example`.
 |---|---|
 | `meter_pipeline.py` | Fetches NextCentury readings and checkpoints to `meter_state.json`. |
 | `seattle_bill.py` | Logs into Seattle MyUtilities over HTTP, fetches the bill, and writes the split CSV. |
-| `nextcentury_credentials.conf.example` | Public-safe template for local credentials and account IDs. |
-| `hoa_adjustments.json.example` | Public-safe template for local per-cycle manual adjustments. |
+| `config/nextcentury_credentials.conf.example` | Public-safe template for local credentials and account IDs. |
+| `config/hoa_adjustments.json.example` | Public-safe template for local per-cycle manual adjustments. |
 | `AGENT_RUNBOOK.md` | Repeatable operating procedure for each billing cycle. |
 
-Ignored local files include credentials, state files, scratch `work/` data, generated CSVs,
-and per-cycle HOA adjustments.
+Ignored local files include the real `config/` secrets (credentials and the Google
+service-account key), state files, generated CSVs under `output/`, and per-cycle HOA
+adjustments. Only the `config/*.example` templates are tracked.
 
 ## Local Config
 
 Copy the example config and fill in local values:
 
 ```bash
-cp nextcentury_credentials.conf.example nextcentury_credentials.conf
-chmod 600 nextcentury_credentials.conf
+cp config/nextcentury_credentials.conf.example config/nextcentury_credentials.conf
+chmod 600 config/nextcentury_credentials.conf
 ```
 
 Required keys:
@@ -69,7 +70,7 @@ NextCentury:
 - Base URL: `https://api.nextcenturymeters.com`
 - Login: `POST /login` with `{email, password, deviceId}` and header `version: 2`
 - Authenticated requests send the returned token in the `authorization` header.
-- Property ID and unit names come from `nextcentury_credentials.conf`.
+- Property ID and unit names come from `config/nextcentury_credentials.conf`.
 - Daily reads endpoint: `/api/Units/{unitId}/DailyReads?from={ISO}&to={ISO}`
 - The representative reading for a day is the last check-in for that day.
 
@@ -78,7 +79,7 @@ Seattle MyUtilities:
 - Portal: `https://myutilities.seattle.gov`
 - Login is handled by `seattle_bill.py login`; avoid repeated failed login attempts.
 - The script stores only the portal bearer token in ignored local state.
-- `SPU_ACCOUNT_NUMBER` comes from `nextcentury_credentials.conf`.
+- `SPU_ACCOUNT_NUMBER` comes from `config/nextcentury_credentials.conf`.
 
 ## Split Rules
 

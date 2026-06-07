@@ -11,6 +11,8 @@ Usage:
   python3 seattle_bill.py login        # run full login, save bearer token to state
   python3 seattle_bill.py discover     # with a valid token, probe candidate bill endpoints
   python3 seattle_bill.py get <PATH>   # GET an authed /rest path and print JSON
+  python3 seattle_bill.py split        # fetch bill, write spu_bill_split_<date>.csv
+  python3 seattle_bill.py sheet        # split + write sheet_upload_<date>.csv + push to Google Sheet
 """
 import os, re, sys, json, html, time, urllib.parse
 
@@ -18,8 +20,20 @@ import requests
 
 # All data files live next to this script, so the whole folder can be moved/renamed freely.
 BASE = os.path.dirname(os.path.abspath(__file__))
-CONF = os.path.join(BASE, "nextcentury_credentials.conf")
+# Credentials, per-account settings, and the Google service-account key live in config/.
+CONFIG_DIR = os.path.join(BASE, "config")
+CONF = os.path.join(CONFIG_DIR, "nextcentury_credentials.conf")
 STATE = os.path.join(BASE, "seattle_state.json")
+# Generated billing CSVs are written here (created on demand) to keep them out of the repo root.
+OUTPUT_DIR = os.path.join(BASE, "output")
+
+
+def sa_keyfile(conf=None):
+    """Resolve the Google service-account key path. A relative GOOGLE_SA_KEYFILE is taken
+    relative to config/; falls back to config/google_service_account.json."""
+    conf = load_conf() if conf is None else conf
+    kf = conf.get("GOOGLE_SA_KEYFILE", "") or "google_service_account.json"
+    return kf if os.path.isabs(kf) else os.path.join(CONFIG_DIR, kf)
 
 EPORTAL = "https://myutilities.seattle.gov"
 LOGIN_HOST = "https://login.seattle.gov"
@@ -189,12 +203,12 @@ def get(path):
 
 
 SPU_ACCOUNT = load_conf().get("SPU_ACCOUNT_NUMBER", "")
-HOA_FILE = os.path.join(BASE, "hoa_adjustments.json")
+HOA_FILE = os.path.join(CONFIG_DIR, "hoa_adjustments.json")
 
 
 def load_hoa(path=HOA_FILE):
     """Optional per-unit HOA line items (Landscape, Admin fee, Extra garbage, ...).
-    Format: { "Landscape": {"2505": 20.0, "2507": 0.0, "6761": -20.0}, ... }
+    Format: { "Landscape": {"UNIT_1": 20.0, "UNIT_2": 0.0, "UNIT_3": -20.0}, ... }
     These are manual, vary each cycle, and typically net ~$0 across units.
     Returns {} if the file is absent."""
     try:
@@ -208,7 +222,7 @@ def load_hoa(path=HOA_FILE):
 def fetch_bill():
     """Return the current SPU bill summary dict (uses saved bearer)."""
     if not SPU_ACCOUNT:
-        raise SystemExit("missing SPU_ACCOUNT_NUMBER in nextcentury_credentials.conf")
+        raise SystemExit("missing SPU_ACCOUNT_NUMBER in config/nextcentury_credentials.conf")
     s = authed_session()
     st = load_state()
     tok = st["access_token"]
@@ -316,7 +330,8 @@ def split(out_csv=None):
     # clear which billing cycle each CSV is for, e.g. spu_bill_split_2026-06-02.csv.
     if out_csv is None:
         mm, dd, yyyy = bill["currentBillDate"].split("/")
-        out_csv = os.path.join(BASE, f"spu_bill_split_{yyyy}-{mm}-{dd}.csv")
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        out_csv = os.path.join(OUTPUT_DIR, f"spu_bill_split_{yyyy}-{mm}-{dd}.csv")
 
     if out_csv:
         with open(out_csv, "w", newline="") as f:
@@ -346,6 +361,111 @@ def split(out_csv=None):
     return out
 
 
+# --------------------------------------------------------------------------- google sheet
+def _usd(v):
+    """Format a 2-decimal numeric string as the sheet shows it: $75.10, $-20.00."""
+    return f"${v}"
+
+
+def build_sheet_grid(out):
+    """Turn the split() result into the human 'sheet_upload' layout: a title row, a
+    metadata block, a components block, then the unit table + TOTAL. This mirrors the
+    existing sheet_upload_<date>.csv format exactly (text cells with $ and %)."""
+    comp = out["components"]
+    rows = out["rows"]
+    base = {"unit", "usage_gal", "usage_pct", "water", "sewer", "garbage", "spu_total"}
+    # HOA item columns (Landscape, Extra garbage, ...) appear only when present, in order.
+    hoa_items = [k for k in rows[0] if k not in base and k not in ("hoa_total", "current_bill")] if rows else []
+    has_hoa = bool(hoa_items) and "current_bill" in (rows[0] if rows else {})
+
+    grid = []
+    grid.append([f"SPU Bill Split — {out['service_address']}"])
+    grid.append(["SPU account", out["spu_account"]])
+    grid.append(["Bill date", out["bill_date"], "Due", out["due_date"]])
+    grid.append(["Service period", out["usage_period"]])
+    grid.append(["Bill total", _usd(out["bill_total"])])
+    grid.append([])
+    grid.append(["Component", "Amount", "Split method"])
+    grid.append(["Water", _usd(comp["water"]), "by water usage %"])
+    grid.append(["Sewer", _usd(comp["sewer"]), "equal thirds"])
+    grid.append(["Garbage (Solid Waste)", _usd(comp["garbage"]), "equal thirds"])
+    grid.append([])
+
+    header = ["Unit", "Usage (gal)", "Usage %", "Water", "Sewer", "Garbage", "SPU subtotal"]
+    if has_hoa:
+        header += hoa_items + ["HOA total", "Current bill"]
+    grid.append(header)
+
+    for r in rows:
+        line = [r["unit"], str(r["usage_gal"]), f"{r['usage_pct']:.2f}%",
+                _usd(r["water"]), _usd(r["sewer"]), _usd(r["garbage"]), _usd(r["spu_total"])]
+        if has_hoa:
+            line += [_usd(r[item]) for item in hoa_items]
+            line += [_usd(r["hoa_total"]), _usd(r["current_bill"])]
+        grid.append(line)
+
+    total_usage = sum(int(r["usage_gal"]) for r in rows)
+    tot = ["TOTAL", str(total_usage), "100%", _usd(comp["water"]), _usd(comp["sewer"]),
+           _usd(comp["garbage"]), _usd(out["bill_total"])]
+    if has_hoa:
+        # Match sheet_upload: per-item HOA cells and HOA-total cell are left blank in the
+        # TOTAL row; only the grand 'Current bill' is filled.
+        grand = sum(float(r["current_bill"]) for r in rows)
+        tot += [""] * len(hoa_items) + ["", _usd(f"{grand:.2f}")]
+    grid.append(tot)
+    return grid
+
+
+def push_to_sheet(grid, tab_title):
+    """Write `grid` to a worksheet named `tab_title` in GOOGLE_SHEET_ID using a service
+    account. Creates the tab if missing; clears and reuses it on a re-run (idempotent)."""
+    conf = load_conf()
+    sheet_id = conf.get("GOOGLE_SHEET_ID", "")
+    keyfile = sa_keyfile(conf)
+    if not sheet_id or sheet_id == "replace-me":
+        raise SystemExit("set GOOGLE_SHEET_ID in config/nextcentury_credentials.conf")
+    if not os.path.exists(keyfile):
+        raise SystemExit(f"service-account key not found: {keyfile}\n"
+                         "  create one in Google Cloud, share the sheet with its email (Editor),\n"
+                         "  and set GOOGLE_SA_KEYFILE in config/nextcentury_credentials.conf")
+    try:
+        import gspread
+    except ImportError:
+        raise SystemExit("gspread not installed: pip3 install gspread google-auth")
+
+    gc = gspread.service_account(filename=keyfile)
+    sh = gc.open_by_key(sheet_id)
+    try:
+        ws = sh.worksheet(tab_title)
+        ws.clear()
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=tab_title, rows=max(40, len(grid) + 5), cols=20)
+
+    width = max((len(r) for r in grid), default=1)
+    body = [r + [""] * (width - len(r)) for r in grid]   # pad ragged rows to a rectangle
+    ws.update(range_name="A1", values=body, value_input_option="RAW")
+    print(f"pushed to sheet tab '{tab_title}'")
+    return sh.url
+
+
+def sheet():
+    """Full sheet workflow: compute the split, write the pretty CSV, push to Google."""
+    import csv
+    out = split()                                   # also writes the machine spu_bill_split CSV
+    grid = build_sheet_grid(out)
+
+    mm, dd, yyyy = out["bill_date"].split("/")
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    pretty_csv = os.path.join(OUTPUT_DIR, f"sheet_upload_{yyyy}-{mm}-{dd}.csv")
+    with open(pretty_csv, "w", newline="") as f:
+        csv.writer(f).writerows(grid)
+    print("wrote", pretty_csv)
+
+    url = push_to_sheet(grid, f"{yyyy}-{mm}-{dd}")
+    print("sheet:", url)
+    return out
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "help"
     if cmd == "login":
@@ -358,5 +478,7 @@ if __name__ == "__main__":
         # No path given -> split() auto-names it spu_bill_split_<bill-date>.csv.
         out = sys.argv[2] if len(sys.argv) > 2 else None
         split(out_csv=out)
+    elif cmd == "sheet":
+        sheet()
     else:
         print(__doc__)

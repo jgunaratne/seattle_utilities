@@ -6,11 +6,11 @@ bill, compute the split, and prepare CSV output.
 Before running anything, create the local config:
 
 ```bash
-cp nextcentury_credentials.conf.example nextcentury_credentials.conf
-chmod 600 nextcentury_credentials.conf
+cp config/nextcentury_credentials.conf.example config/nextcentury_credentials.conf
+chmod 600 config/nextcentury_credentials.conf
 ```
 
-Fill in the local-only values in `nextcentury_credentials.conf`:
+Fill in the local-only values in `config/nextcentury_credentials.conf`:
 
 - `NC_EMAIL`
 - `NC_PASSWORD`
@@ -21,8 +21,9 @@ Fill in the local-only values in `nextcentury_credentials.conf`:
 - `SPU_ACCOUNT_NUMBER`
 - `GOOGLE_SHEET_ID` if you use a sheet workflow
 
-Do not commit `nextcentury_credentials.conf`, `*_state.json`, `work/`, generated CSVs, or
-`hoa_adjustments.json`.
+Do not commit the real files under `config/` (`nextcentury_credentials.conf`,
+`hoa_adjustments.json`, the Google service-account key), `*_state.json`, or generated CSVs
+under `output/`. Only the `config/*.example` templates are tracked.
 
 ## Constraints
 
@@ -48,10 +49,10 @@ Sanity check: the new period's start reads should match the previous period's en
 If this cycle has manual HOA adjustments, copy the example file and edit local values:
 
 ```bash
-cp hoa_adjustments.json.example hoa_adjustments.json
+cp config/hoa_adjustments.json.example config/hoa_adjustments.json
 ```
 
-`hoa_adjustments.json` is ignored by git. Lines whose keys start with `_` are ignored by the
+`config/hoa_adjustments.json` is ignored by git. Lines whose keys start with `_` are ignored by the
 script. Verify these values against the actual HOA charges before sending a bill.
 
 ## Step 3: Fetch Bill and Compute Split
@@ -62,7 +63,7 @@ python3 seattle_bill.py split
 ```
 
 `split` fetches the current bill, reads `meter_state.json`, applies optional HOA items, and
-writes `spu_bill_split_<bill-date>.csv`.
+writes `output/spu_bill_split_<bill-date>.csv`.
 
 Sanity checks:
 
@@ -83,7 +84,7 @@ sheet IDs in the ignored local config file.
 
 ```bash
 python3 meter_pipeline.py readings --start <prev-bill-date> --end <this-bill-date>
-# edit hoa_adjustments.json if needed
+# edit config/hoa_adjustments.json if needed
 python3 seattle_bill.py login
 python3 seattle_bill.py split
 ```
