@@ -22,7 +22,14 @@
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
 
-PY="${PYTHON:-python3}"
+# Prefer an explicit $PYTHON, then the project venv if present, then system python3.
+if [ -n "${PYTHON:-}" ]; then
+  PY="$PYTHON"
+elif [ -x ".venv/bin/python" ]; then
+  PY=".venv/bin/python"
+else
+  PY="python3"
+fi
 date_re='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
 
 die()  { echo "ERROR: $*" >&2; exit 1; }
