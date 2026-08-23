@@ -400,6 +400,10 @@ def build_sheet_grid(out):
     units = [r["unit"] for r in rows]
     by_unit = {r["unit"]: r for r in rows}
 
+    def _all_col(value, note):
+        """A row holding one value in the 'All' column (past the label + unit columns)."""
+        return [""] * (len(units) + 1) + [value, note]
+
     grid = []
     grid.append([""] + units + ["All"])
     grid.append(["Water", _usd(comp["water"])])
@@ -413,18 +417,24 @@ def build_sheet_grid(out):
     grid.append(["Water cost"] + [_usd(by_unit[u]["water"]) for u in units] + [_usd(comp["water"])])
     grid.append(["Sewer"] + [_usd(by_unit[u]["sewer"]) for u in units] + [_usd(comp["sewer"])])
     grid.append(["Garbage"] + [_usd(by_unit[u]["garbage"]) for u in units] + [_usd(comp["garbage"])])
-    grid.append([_usd(out["bill_total"]), "Combined"])
+    # 'Combined' is the figure straight off the bill; 'Check' is the sum of the rounded
+    # per-unit cells beside it. They sit in the 'All' column so a rounding drift is visible.
+    spu_sum = sum(float(by_unit[u]["spu_total"]) for u in units)
+    grid.append(_all_col(_usd(out["bill_total"]), "Combined"))
     grid.append(["Total"] + [_usd(by_unit[u]["spu_total"]) for u in units]
-                + [_usd(out["bill_total"]), "Check"])
+                + [_usd(f"{spu_sum:.2f}"), "Check"])
 
     if has_hoa:
         for item in hoa_items:
             grid.append([item] + [_usd(by_unit[u][item]) for u in units])
         grid.append(["HOA total"] + [_usd(by_unit[u]["hoa_total"]) for u in units])
+        # Same Combined/Check pair as above: the bill plus the HOA adjustments, against
+        # the sum of the rounded per-unit 'current bill' cells.
+        combined = float(out["bill_total"]) + sum(float(by_unit[u]["hoa_total"]) for u in units)
         grand = sum(float(by_unit[u]["current_bill"]) for u in units)
-        grid.append([_usd(by_unit[u]["current_bill"]) for u in units]
-                    + [_usd(f"{grand:.2f}"), "Combined"])
-        grid.append(["Current bill", _usd(f"{grand:.2f}"), "Check"])
+        grid.append(_all_col(_usd(f"{combined:.2f}"), "Combined"))
+        grid.append(["Current bill"] + [_usd(by_unit[u]["current_bill"]) for u in units]
+                    + [_usd(f"{grand:.2f}"), "Check"])
     return grid
 
 
