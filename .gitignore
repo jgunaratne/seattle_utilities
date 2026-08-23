@@ -12,6 +12,10 @@ work/
 google_service_account.json
 *service_account*.json
 *.iam.gserviceaccount.com.json
+# Google downloads SA keys as "<project-id>-<keyid>.json", which none of the patterns
+# above match. No *.json is tracked at the repo root, so ignore them all rather than
+# leave a freshly downloaded key committable.
+/*.json
 
 # config/ holds real secrets (credentials + service-account key); only the
 # *.example templates are tracked. (.example files don't end in .json/.conf.)

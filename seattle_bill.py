@@ -323,7 +323,12 @@ def split(out_csv=None):
            "bill_date": bill["currentBillDate"], "due_date": bill["paymentDueDate"],
            "bill_total": f"{total:.2f}",
            "components": {k: f"{v:.2f}" for k, v in comp.items()},
-           "usage_period": f"{tbl['start_date']} to {tbl['end_date']}", "rows": rows}
+           "usage_period": f"{tbl['start_date']} to {tbl['end_date']}",
+           # Meter reads are carried through so the sheet grid can show the two
+           # cumulative-reading rows the tracking sheet has always had.
+           "start_date": tbl["start_date"], "end_date": tbl["end_date"],
+           "start_reads": tbl["start_reads"], "end_reads": tbl["end_reads"],
+           "rows": rows}
     print(json.dumps(out, indent=2))
 
     # Default filename is date-stamped with the bill date (MM/DD/YYYY -> YYYY-MM-DD) so it's
@@ -363,56 +368,63 @@ def split(out_csv=None):
 
 # --------------------------------------------------------------------------- google sheet
 def _usd(v):
-    """Format a 2-decimal numeric string as the sheet shows it: $75.10, $-20.00."""
-    return f"${v}"
+    """Format a 2-decimal numeric string as the sheet shows it: $75.10, -$20.00.
+    The sign goes outside the '$' so Sheets parses it as a negative currency value."""
+    s = str(v)
+    return f"-${s[1:]}" if s.startswith("-") else f"${s}"
+
+
+def _short_date(iso):
+    """'2026-05-26' -> '5/26/26', the form the tracking sheet's reading rows use."""
+    yyyy, mm, dd = iso.split("-")
+    return f"{int(mm)}/{int(dd)}/{yyyy[2:]}"
+
+
+def tab_title(bill_date):
+    """'08/03/2026' -> '8/3/2026', matching the existing tab names in the sheet."""
+    mm, dd, yyyy = bill_date.split("/")
+    return f"{int(mm)}/{int(dd)}/{yyyy}"
 
 
 def build_sheet_grid(out):
-    """Turn the split() result into the human 'sheet_upload' layout: a title row, a
-    metadata block, a components block, then the unit table + TOTAL. This mirrors the
-    existing sheet_upload_<date>.csv format exactly (text cells with $ and %)."""
+    """Turn the split() result into the tracking sheet's own layout: units run across as
+    COLUMNS (2505, 2507, 6761, All) with line items down the side, matching every existing
+    tab. Money is written as '$x.xx' and percents as 'x.xx%'; push_to_sheet sends these with
+    USER_ENTERED so Sheets stores real numbers with currency/percent formatting."""
     comp = out["components"]
     rows = out["rows"]
     base = {"unit", "usage_gal", "usage_pct", "water", "sewer", "garbage", "spu_total"}
-    # HOA item columns (Landscape, Extra garbage, ...) appear only when present, in order.
+    # HOA item rows (Landscape, Extra garbage, ...) appear only when present, in order.
     hoa_items = [k for k in rows[0] if k not in base and k not in ("hoa_total", "current_bill")] if rows else []
     has_hoa = bool(hoa_items) and "current_bill" in (rows[0] if rows else {})
+    units = [r["unit"] for r in rows]
+    by_unit = {r["unit"]: r for r in rows}
 
     grid = []
-    grid.append([f"SPU Bill Split — {out['service_address']}"])
-    grid.append(["SPU account", out["spu_account"]])
-    grid.append(["Bill date", out["bill_date"], "Due", out["due_date"]])
-    grid.append(["Service period", out["usage_period"]])
-    grid.append(["Bill total", _usd(out["bill_total"])])
-    grid.append([])
-    grid.append(["Component", "Amount", "Split method"])
-    grid.append(["Water", _usd(comp["water"]), "by water usage %"])
-    grid.append(["Sewer", _usd(comp["sewer"]), "equal thirds"])
-    grid.append(["Garbage (Solid Waste)", _usd(comp["garbage"]), "equal thirds"])
-    grid.append([])
+    grid.append([""] + units + ["All"])
+    grid.append(["Water", _usd(comp["water"])])
+    # Two cumulative-reading rows; the start row must match last cycle's end row.
+    grid.append([_short_date(out["start_date"])] + [out["start_reads"][u] for u in units])
+    grid.append([_short_date(out["end_date"])] + [out["end_reads"][u] for u in units])
 
-    header = ["Unit", "Usage (gal)", "Usage %", "Water", "Sewer", "Garbage", "SPU subtotal"]
+    total_usage = sum(int(by_unit[u]["usage_gal"]) for u in units)
+    grid.append(["Water usage"] + [by_unit[u]["usage_gal"] for u in units] + [total_usage])
+    grid.append(["Water percent"] + [f"{by_unit[u]['usage_pct']:.2f}%" for u in units] + ["100.00%"])
+    grid.append(["Water cost"] + [_usd(by_unit[u]["water"]) for u in units] + [_usd(comp["water"])])
+    grid.append(["Sewer"] + [_usd(by_unit[u]["sewer"]) for u in units] + [_usd(comp["sewer"])])
+    grid.append(["Garbage"] + [_usd(by_unit[u]["garbage"]) for u in units] + [_usd(comp["garbage"])])
+    grid.append([_usd(out["bill_total"]), "Combined"])
+    grid.append(["Total"] + [_usd(by_unit[u]["spu_total"]) for u in units]
+                + [_usd(out["bill_total"]), "Check"])
+
     if has_hoa:
-        header += hoa_items + ["HOA total", "Current bill"]
-    grid.append(header)
-
-    for r in rows:
-        line = [r["unit"], str(r["usage_gal"]), f"{r['usage_pct']:.2f}%",
-                _usd(r["water"]), _usd(r["sewer"]), _usd(r["garbage"]), _usd(r["spu_total"])]
-        if has_hoa:
-            line += [_usd(r[item]) for item in hoa_items]
-            line += [_usd(r["hoa_total"]), _usd(r["current_bill"])]
-        grid.append(line)
-
-    total_usage = sum(int(r["usage_gal"]) for r in rows)
-    tot = ["TOTAL", str(total_usage), "100%", _usd(comp["water"]), _usd(comp["sewer"]),
-           _usd(comp["garbage"]), _usd(out["bill_total"])]
-    if has_hoa:
-        # Match sheet_upload: per-item HOA cells and HOA-total cell are left blank in the
-        # TOTAL row; only the grand 'Current bill' is filled.
-        grand = sum(float(r["current_bill"]) for r in rows)
-        tot += [""] * len(hoa_items) + ["", _usd(f"{grand:.2f}")]
-    grid.append(tot)
+        for item in hoa_items:
+            grid.append([item] + [_usd(by_unit[u][item]) for u in units])
+        grid.append(["HOA total"] + [_usd(by_unit[u]["hoa_total"]) for u in units])
+        grand = sum(float(by_unit[u]["current_bill"]) for u in units)
+        grid.append([_usd(by_unit[u]["current_bill"]) for u in units]
+                    + [_usd(f"{grand:.2f}"), "Combined"])
+        grid.append(["Current bill", _usd(f"{grand:.2f}"), "Check"])
     return grid
 
 
@@ -439,11 +451,14 @@ def push_to_sheet(grid, tab_title):
         ws = sh.worksheet(tab_title)
         ws.clear()
     except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=tab_title, rows=max(40, len(grid) + 5), cols=20)
+        # index=0 so the newest cycle sits first, the way the sheet is already ordered.
+        ws = sh.add_worksheet(title=tab_title, rows=max(40, len(grid) + 5), cols=20, index=0)
 
     width = max((len(r) for r in grid), default=1)
     body = [r + [""] * (width - len(r)) for r in grid]   # pad ragged rows to a rectangle
-    ws.update(range_name="A1", values=body, value_input_option="RAW")
+    # USER_ENTERED so '$50.48' / '36.12%' land as real numbers with currency and percent
+    # formatting, the way the hand-maintained tabs store them, rather than as text.
+    ws.update(range_name="A1", values=body, value_input_option="USER_ENTERED")
     print(f"pushed to sheet tab '{tab_title}'")
     return sh.url
 
@@ -461,7 +476,7 @@ def sheet():
         csv.writer(f).writerows(grid)
     print("wrote", pretty_csv)
 
-    url = push_to_sheet(grid, f"{yyyy}-{mm}-{dd}")
+    url = push_to_sheet(grid, tab_title(out["bill_date"]))
     print("sheet:", url)
     return out
 
