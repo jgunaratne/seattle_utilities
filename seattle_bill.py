@@ -387,10 +387,17 @@ def tab_title(bill_date):
 
 
 def build_sheet_grid(out):
-    """Turn the split() result into the tracking sheet's own layout: units run across as
-    COLUMNS (2505, 2507, 6761, All) with line items down the side, matching every existing
-    tab. Money is written as '$x.xx' and percents as 'x.xx%'; push_to_sheet sends these with
-    USER_ENTERED so Sheets stores real numbers with currency/percent formatting."""
+    """Turn the split() result into the tracking sheet's own layout, reproducing the
+    hand-maintained tabs cell for cell: units run across as COLUMNS with line items down
+    the side. The grid is 7 columns wide --
+
+        A label | B..D units | E usage totals | F money 'All' | G Combined/Check note
+
+    Note the two distinct total columns: the water usage and percent rows total into E,
+    while every money row totals into F. Blank spacer rows separate the water block, the
+    SPU total, the HOA items and the final pair, as they do in the sheet. Money is written
+    as '$x.xx' and percents as 'x.xx%'; push_to_sheet sends these with USER_ENTERED so
+    Sheets stores real numbers with currency/percent formatting."""
     comp = out["components"]
     rows = out["rows"]
     base = {"unit", "usage_gal", "usage_pct", "water", "sewer", "garbage", "spu_total"}
@@ -399,44 +406,49 @@ def build_sheet_grid(out):
     has_hoa = bool(hoa_items) and "current_bill" in (rows[0] if rows else {})
     units = [r["unit"] for r in rows]
     by_unit = {r["unit"]: r for r in rows}
+    n = len(units)
 
-    def _all_col(value, note):
-        """A row holding one value in the 'All' column (past the label + unit columns)."""
-        return [""] * (len(units) + 1) + [value, note]
+    def money_row(label, per_unit, total):
+        """Label, one cell per unit, then the total in the money 'All' column (F)."""
+        return [label] + per_unit + ["", total]
 
     grid = []
-    grid.append([""] + units + ["All"])
-    # Section header for the water block. The bill's water total belongs to the whole
-    # property, so it goes in the 'All' column, not in the first unit's column.
-    grid.append(["Water"] + [""] * len(units) + [_usd(comp["water"])])
+    grid.append([""] + units + ["", "All"])
+    # Section header: the water total sits in the money column, not beside the label.
+    grid.append(["Water"] + [""] * n + ["", _usd(comp["water"])])
     # Two cumulative-reading rows; the start row must match last cycle's end row.
     grid.append([_short_date(out["start_date"])] + [out["start_reads"][u] for u in units])
     grid.append([_short_date(out["end_date"])] + [out["end_reads"][u] for u in units])
-
-    total_usage = sum(int(by_unit[u]["usage_gal"]) for u in units)
-    grid.append(["Water usage"] + [by_unit[u]["usage_gal"] for u in units] + [total_usage])
+    # Usage and percent total into column E, one left of the money column.
+    grid.append(["Water usage"] + [by_unit[u]["usage_gal"] for u in units]
+                + [sum(int(by_unit[u]["usage_gal"]) for u in units)])
     grid.append(["Water percent"] + [f"{by_unit[u]['usage_pct']:.2f}%" for u in units] + ["100.00%"])
+    # 'Water cost' closes the water sub-block, so like usage and percent it totals into E;
+    # the same figure appears in F on the 'Water' header row, beside sewer and garbage.
     grid.append(["Water cost"] + [_usd(by_unit[u]["water"]) for u in units] + [_usd(comp["water"])])
-    grid.append(["Sewer"] + [_usd(by_unit[u]["sewer"]) for u in units] + [_usd(comp["sewer"])])
-    grid.append(["Garbage"] + [_usd(by_unit[u]["garbage"]) for u in units] + [_usd(comp["garbage"])])
-    # 'Combined' is the figure straight off the bill; 'Check' is the sum of the rounded
-    # per-unit cells beside it. They sit in the 'All' column so a rounding drift is visible.
+    grid.append([])
+    grid.append(money_row("Sewer", [_usd(by_unit[u]["sewer"]) for u in units], _usd(comp["sewer"])))
+    grid.append(money_row("Garbage", [_usd(by_unit[u]["garbage"]) for u in units], _usd(comp["garbage"])))
+    grid.append([])
+    # 'Combined' is the figure off the bill; 'Check' is the sum of the per-unit cells
+    # beside it, so any rounding drift between the two shows up in the sheet.
     spu_sum = sum(float(by_unit[u]["spu_total"]) for u in units)
-    grid.append(_all_col(_usd(out["bill_total"]), "Combined"))
-    grid.append(["Total"] + [_usd(by_unit[u]["spu_total"]) for u in units]
-                + [_usd(f"{spu_sum:.2f}"), "Check"])
+    grid.append([""] * (n + 2) + [_usd(out["bill_total"]), "Combined"])
+    grid.append(money_row("Total", [_usd(by_unit[u]["spu_total"]) for u in units],
+                          _usd(f"{spu_sum:.2f}")) + ["Check"])
 
     if has_hoa:
+        grid.append([])
         for item in hoa_items:
             grid.append([item] + [_usd(by_unit[u][item]) for u in units])
         grid.append(["HOA total"] + [_usd(by_unit[u]["hoa_total"]) for u in units])
-        # Same Combined/Check pair as above: the bill plus the HOA adjustments, against
-        # the sum of the rounded per-unit 'current bill' cells.
-        combined = float(out["bill_total"]) + sum(float(by_unit[u]["hoa_total"]) for u in units)
+        grid.append([])
+        # Mirror image of the SPU pair above: here the per-unit cells sit on the 'Combined'
+        # row and the 'Check' row carries only the label and the grand total.
         grand = sum(float(by_unit[u]["current_bill"]) for u in units)
-        grid.append(_all_col(_usd(f"{combined:.2f}"), "Combined"))
-        grid.append(["Current bill"] + [_usd(by_unit[u]["current_bill"]) for u in units]
-                    + [_usd(f"{grand:.2f}"), "Check"])
+        grid.append([""] + [_usd(by_unit[u]["current_bill"]) for u in units]
+                    + ["", _usd(f"{grand:.2f}"), "Combined"])
+        grid.append(["Current bill"] + [""] * n + ["", _usd(f"{grand:.2f}"), "Check"])
     return grid
 
 
