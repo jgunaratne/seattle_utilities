@@ -406,7 +406,9 @@ def build_sheet_grid(out):
 
     grid = []
     grid.append([""] + units + ["All"])
-    grid.append(["Water", _usd(comp["water"])])
+    # Section header for the water block. The bill's water total belongs to the whole
+    # property, so it goes in the 'All' column, not in the first unit's column.
+    grid.append(["Water"] + [""] * len(units) + [_usd(comp["water"])])
     # Two cumulative-reading rows; the start row must match last cycle's end row.
     grid.append([_short_date(out["start_date"])] + [out["start_reads"][u] for u in units])
     grid.append([_short_date(out["end_date"])] + [out["end_reads"][u] for u in units])
